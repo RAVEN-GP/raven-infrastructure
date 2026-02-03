@@ -9,7 +9,7 @@ echo "-> Installing Python dependencies..."
 # 2. Link CLI
 echo "-> Linking 'raven' CLI to /usr/local/bin..."
 chmod +x cli/raven.py
-# sudo ln -nfs $(pwd)/cli/raven.py /usr/local/bin/raven
+sudo ln -nfs "$(pwd)/cli/raven.py" /usr/local/bin/raven
 
 echo "✅ Installation Complete!"
 echo "Try running: ./cli/raven.py status"

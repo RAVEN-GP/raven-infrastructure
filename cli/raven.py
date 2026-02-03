@@ -24,6 +24,8 @@ def run_cmd(cmd, shell=True):
 
 def start_car(mode):
     log(f"Starting RAVEN stack in mode: {mode}")
+    print("  -> Starting engine... 🏎️")
+    print("  -> Lights out and away we go! 🚦")
     
     # Example logic: Start ROS core depending on configuration
     # run_cmd("systemctl start roscore") 
@@ -43,11 +45,30 @@ def start_car(mode):
 
 def stop_car():
     log("Stopping RAVEN stack...", "WARN")
+    print("  -> Box, box, box! 🏁")
     # run_cmd("systemctl stop raven-brain")
     # run_cmd("systemctl stop raven-embedded")
     print("  -> Stopping all ROS nodes...")
     print("  -> Parking servos...")
     log("RAVEN system HALTED.", "SUCCESS")
+
+def deploy_code():
+    log("Deploying latest code...", "INFO")
+    print("  -> Pulling from git (origin/main)...")
+    # run_cmd("git pull origin main")
+    print("  -> Building ROS workspace...")
+    time.sleep(1)
+    log("Deploy complete! New strategy available.", "SUCCESS")
+
+def tail_logs():
+    log("Tailing system logs (Ctrl+C to exit)...", "INFO")
+    try:
+        while True:
+            # Mock log stream
+            time.sleep(2)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] [BRAIN] Planner: Waypoint reached.")
+    except KeyboardInterrupt:
+        print("\nLog stream stopped.")
 
 def status_car():
     print("\n--- RAVEN SYSTEM STATUS ---")
@@ -70,6 +91,12 @@ def main():
     # Status
     subparsers.add_parser("status", help="Show system diagnostic status")
 
+    # Deploy
+    subparsers.add_parser("deploy", help="Pull and build latest code")
+
+    # Logs
+    subparsers.add_parser("logs", help="Tail system logs")
+
     args = parser.parse_args()
 
     if args.command == "start":
@@ -78,6 +105,10 @@ def main():
         stop_car()
     elif args.command == "status":
         status_car()
+    elif args.command == "deploy":
+        deploy_code()
+    elif args.command == "logs":
+        tail_logs()
     else:
         parser.print_help()
 
