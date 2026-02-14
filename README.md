@@ -15,12 +15,39 @@ We provide a unified command-line tool to manage the car. No more remembering co
 
 ### Usage
 ```bash
-raven start [mode]   # Start the car stack
+raven start [mode]   # Start the car stack (autonomous/manual/debug)
 raven stop           # Stop all services
 raven status         # Check system health
 raven deploy         # Pull latest code for all repos
 raven logs           # Tail logs from the brain
+raven docs [action]  # Manage docs (check/build/open)
+raven test [repo]    # Run test suite (all or specific repo)
 ```
+
+## 🧪 Testing & Verification
+
+We support both bulk testing and targeted repository testing to ensure 98%+ code coverage.
+
+### Bulk Testing (All Repos)
+Run the full CI/CD test suite across the entire stack:
+```bash
+raven test
+```
+
+### Targeted Testing
+Test a specific repository in isolation:
+```bash
+raven test raven-brain-stack
+raven test raven-embedded-control
+```
+
+## 📚 Documentation Management
+
+Keep the knowledge base healthy with our smart doc tools:
+
+- `raven docs check`: Verify that all new feature code is documented.
+- `raven docs build`: Compile the Sphinx documentation locally.
+- `raven docs open`: Serve the documentation on a local web server.
 
 ## 📂 Structure
 - **`cli/`**: Python-based CLI tool source code.
