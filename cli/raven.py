@@ -4,7 +4,12 @@ import subprocess
 import sys
 import time
 import os
+import re
 from datetime import datetime
+try:
+    import serial.tools.list_ports
+except ImportError:
+    serial = None
 
 # Configuration
 SERVICES = {
@@ -44,6 +49,46 @@ def resolve_path(repo_name):
          return None
     return target
 
+def detect_serial_port():
+    """Smart detection of the embedded serial port (Nucleo or Arduino)."""
+    # 1. Try pyserial if available
+    if serial:
+        ports = serial.tools.list_ports.comports()
+        for port in ports:
+            # Check for typical descriptors
+            if "STM32" in port.description or "NUCLEO" in port.description:
+                 return port.device
+            if "Arduino" in port.description or "usbmodem" in port.device: 
+                 return port.device
+            # Fallback to regex for Linux ttyACM
+            if re.match(r"/dev/ttyACM\d+", port.device):
+                 return port.device
+    
+    # 2. Fallback: Use arduino-cli if available
+    import shutil
+    arduino_cli = shutil.which("arduino-cli")
+    if not arduino_cli and os.path.exists("/opt/homebrew/bin/arduino-cli"):
+        arduino_cli = "/opt/homebrew/bin/arduino-cli"
+        
+    if arduino_cli:
+        try:
+            # Run board list
+            result = subprocess.run([arduino_cli, "board", "list"], capture_output=True, text=True)
+            # Output format: Port Protocol ... FQBN
+            # /dev/cu.usbmodem14201 Serial ... arduino:mbed_nano:nanorp2040connect
+            for line in result.stdout.splitlines():
+                if "nanorp2040connect" in line or "usbmodem" in line:
+                    parts = line.split()
+                    if len(parts) > 0:
+                        return parts[0]
+        except Exception:
+            pass
+
+    if serial is None:
+        log("pyserial not installed and arduino-cli failed to find board.", "WARN")
+        
+    return None
+
 def start_car(mode):
     log(f"Starting RAVEN stack in mode: {mode}")
     
@@ -53,13 +98,21 @@ def start_car(mode):
         dash_script = os.path.join(computer_path, "src", "dashboard", "app.py")
         if os.path.exists(dash_script):
             log("Launching Telemetry Dashboard...", "INFO")
-            # Run in background
+            # Run in background with logging
             try:
-                # Dashboard needs to be run from its dir usually, or we set PYTHONPATH
-                # Let's try running from its dir
-                p = subprocess.Popen(["python3", "app.py"], cwd=os.path.dirname(dash_script), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                # Open log file
+                dash_log = open("/tmp/raven_dashboard.log", "w")
+                
+                # Use current python executable to ensure same env
+                python_exec = sys.executable
+                
+                # start_new_session=True ensures it survives if CLI exits or receives signals
+                p = subprocess.Popen([python_exec, "app.py"], cwd=os.path.dirname(dash_script), 
+                                     stdout=dash_log, stderr=dash_log,
+                                     start_new_session=True)
                 RUNNING_PROCESSES["dashboard"] = p
-                print("  -> Dashboard active at http://localhost:5000 📊")
+                print(f"  -> Dashboard active at http://localhost:5000 📊 (PID: {p.pid})")
+                print("  -> Logs: /tmp/raven_dashboard.log")
             except Exception as e:
                 log(f"Failed to start dashboard: {e}", "ERROR")
         else:
@@ -80,11 +133,16 @@ def start_car(mode):
             python_exec = venv_python if os.path.exists(venv_python) else "python3"
 
             try:
-                # Brain needs to be run from root of raven-brain-stack to resolve 'src' imports
-                # Use the detected python interpreter
-                p = subprocess.Popen([python_exec, "main.py"], cwd=brain_path, env=env)
+                # Open log file
+                brain_log = open("/tmp/raven_brain.log", "w")
+                
+                # start_new_session=True to detach
+                p = subprocess.Popen([python_exec, "main.py"], cwd=brain_path, env=env,
+                                     stdout=brain_log, stderr=brain_log,
+                                     start_new_session=True)
                 RUNNING_PROCESSES["brain"] = p
-                print("  -> Brain is ONLINE. Watching logs... 🧠")
+                print(f"  -> Brain is ONLINE (PID: {p.pid}) 🧠")
+                print("  -> Logs: /tmp/raven_brain.log")
             except Exception as e:
                 log(f"Failed to start brain: {e}", "ERROR")
         else:
@@ -124,6 +182,85 @@ def deploy_code():
     print("  -> Building ROS workspace...")
     time.sleep(1)
     log("Deploy complete! New strategy available.", "SUCCESS")
+
+def flash_firmware(arch):
+    log(f"Flashing firmware for architecture: {arch}", "INFO")
+    
+    embedded_path = resolve_path("raven-embedded-control")
+    if not embedded_path:
+        return
+
+    if arch == "mbed":
+        print("  -> Detected Mbed OS project.")
+        print("  -> Copying binary to Nucleo...")
+        # Check for compiled bin
+        bin_path = os.path.join(embedded_path, "BUILD", "NUCLEO_F401RE", "GCC_ARM", "raven-embedded-control.bin")
+        if not os.path.exists(bin_path):
+             print("\033[93m  -> Binary not found. Please compile first using 'mbed compile'.\033[0m")
+             return
+             
+        # Try to find Nucleo mount
+        volumes = os.listdir("/Volumes") if os.path.exists("/Volumes") else []
+        nucleo_vol = next((v for v in volumes if "NODE" in v or "NUCLEO" in v), None)
+        
+        if nucleo_vol:
+            dest = os.path.join("/Volumes", nucleo_vol)
+            run_cmd(f"cp '{bin_path}' '{dest}'")
+            log("Flashed successfully via Drag-and-Drop.", "SUCCESS")
+        else:
+            log("Nucleo volume not found. Is it connected?", "ERROR")
+
+    elif arch == "arduino":
+        print("  -> Detected Arduino architecture.")
+        sketch_path = os.path.join(embedded_path, "arduino", "raven-rp2040")
+        
+        # Check for arduino-cli
+        import shutil
+        arduino_cli = shutil.which("arduino-cli")
+        if not arduino_cli:
+            # Check common homebrew path
+            if os.path.exists("/opt/homebrew/bin/arduino-cli"):
+                arduino_cli = "/opt/homebrew/bin/arduino-cli"
+            elif os.path.exists("/usr/local/bin/arduino-cli"):
+                arduino_cli = "/usr/local/bin/arduino-cli"
+
+        if arduino_cli:
+            try:
+                subprocess.run([arduino_cli, "version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                print("  -> Compiling and Uploading with arduino-cli...")
+                FQBN = "arduino:mbed_nano:nanorp2040connect"
+                
+                # Get Config
+                # Note: This might be brittle if multiple boards are connected
+                try:
+                    # Compile
+                    compile_cmd = [arduino_cli, "compile", "-b", FQBN, sketch_path]
+                    print(f"  -> Compiling: {' '.join(compile_cmd)}")
+                    subprocess.check_call(compile_cmd)
+                    
+                    # Upload
+                    # We rely on arduino-cli to auto-detect if we pass -p detected_port
+                    # But detection is tricky. Let's try simple upload if port is auto-detected by cli
+                    # Or use our own detection
+                    port = detect_serial_port()
+                    if port:
+                        upload_cmd = [arduino_cli, "upload", "-b", FQBN, "-p", port, sketch_path]
+                        print(f"  -> Uploading to {port}...")
+                        subprocess.check_call(upload_cmd)
+                        log("Firmware updated successfully!", "SUCCESS")
+                    else:
+                        print("\033[93m  -> Compilation success, but no compatible board found for upload.\033[0m")
+                        print("     Please connect the device and try again.")
+
+                except subprocess.CalledProcessError as e:
+                    log(f"Arduino action failed: {e}", "ERROR")
+
+            except Exception as e:
+                log(f"Unexpected error: {e}", "ERROR")
+        else:
+             log("arduino-cli not found in PATH or standard locations.", "ERROR")
+             print("  -> Please install: brew install arduino-cli")
+             print(f"  -> Sketch location: {sketch_path}")
 
 def tail_logs():
     log("Tailing system logs (Ctrl+C to exit)...", "INFO")
@@ -273,6 +410,10 @@ def main():
     # Deploy
     subparsers.add_parser("deploy", help="Pull and build latest code")
 
+    # Flash
+    flash_parser = subparsers.add_parser("flash", help="Flash firmware to microcontroller")
+    flash_parser.add_argument("--arch", choices=["mbed", "arduino"], default="mbed", help="Target architecture")
+
     # Logs
     subparsers.add_parser("logs", help="Tail system logs")
 
@@ -294,6 +435,8 @@ def main():
         status_car()
     elif args.command == "deploy":
         deploy_code()
+    elif args.command == "flash":
+        flash_firmware(args.arch)
     elif args.command == "logs":
         tail_logs()
     elif args.command == "docs":
