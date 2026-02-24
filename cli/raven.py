@@ -317,6 +317,21 @@ def manage_tests(repo=None):
 
     targets = {}
     if repo:
+        if repo == "hardware":
+            log("Running Hardware Diagnostic Test...", "INFO")
+            path = resolve_path("raven-brain-stack")
+            if path:
+                test_script = os.path.join(path, "tests", "test_hardware.py")
+                if os.path.exists(test_script):
+                    python_exec = sys.executable
+                    venv_python = os.path.join(path, "venv", "bin", "python")
+                    if os.path.exists(venv_python):
+                        python_exec = venv_python
+                    subprocess.run([python_exec, test_script])
+                else:
+                    log(f"Hardware test script not found at {test_script}", "ERROR")
+            return
+            
         if repo not in repos:
             log(f"Repository '{repo}' not known.", "ERROR")
             return
@@ -467,6 +482,83 @@ def pull_repos():
         log(summary, "WARN" if success_count > 0 else "ERROR")
 
 
+
+def push_repos(message):
+    log(f"Committing and Pushing all RAVEN repositories with message: '{message}'", "INFO")
+    repos = [
+        "raven-brain-stack",
+        "raven-computer",
+        "raven-documentation",
+        "raven-embedded-control",
+        "raven-infrastructure",
+        "raven-sim"
+    ]
+    
+    success_count = 0
+    fail_count = 0
+    skipped_count = 0
+    no_changes_count = 0
+    
+    for repo in repos:
+        path = resolve_path(repo)
+        if not path:
+            skipped_count += 1
+            continue
+            
+        print(f"🚀 {repo}")
+        try:
+            # Check if it's a git repo
+            if not os.path.exists(os.path.join(path, ".git")):
+                print(f"  └── \033[93mNot a git repository. Skipping.\033[0m\n")
+                skipped_count += 1
+                continue
+                
+            # Check for changes
+            status_cmd = ["git", "-C", path, "status", "--porcelain"]
+            status_result = subprocess.run(status_cmd, capture_output=True, text=True)
+            
+            if not status_result.stdout.strip():
+                print(f"  └── Status: \033[94mNO CHANGES (Skipped)\033[0m\n")
+                no_changes_count += 1
+                continue
+
+            # Git Add
+            add_cmd = ["git", "-C", path, "add", "."]
+            print(f"  ├── Running: {' '.join(add_cmd)}")
+            subprocess.run(add_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            
+            # Git Commit
+            commit_cmd = ["git", "-C", path, "commit", "-m", message]
+            print(f"  ├── Running: git commit -m \"{message}\"")
+            subprocess.run(commit_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            
+            # Git Push
+            push_cmd = ["git", "-C", path, "push"]
+            print(f"  ├── Running: {' '.join(push_cmd)}")
+            push_result = subprocess.run(push_cmd, capture_output=True, text=True)
+            
+            if push_result.returncode == 0:
+                print(f"  └── Status: \033[92mSUCCESS\033[0m\n")
+                success_count += 1
+            else:
+                print(f"  └── Status: \033[91mFAILED (Push Error)\033[0m")
+                print(f"      {push_result.stderr.strip().split(chr(10))[0] if push_result.stderr else 'Unknown Error'}\n")
+                fail_count += 1
+                
+        except subprocess.CalledProcessError as e:
+            print(f"  └── Status: \033[91mFAILED (Command Error)\033[0m\n")
+            fail_count += 1
+        except Exception as e:
+            print(f"  └── Status: \033[91mFAILED\033[0m Error: {e}\n")
+            fail_count += 1
+
+    print("---------------------------------------------------")
+    summary = f"Pushed: {success_count} | No Changes: {no_changes_count} | Failed: {fail_count} | Skipped: {skipped_count}"
+    if fail_count == 0:
+        log(summary, "SUCCESS")
+    else:
+        log(summary, "WARN" if success_count > 0 else "ERROR")
+
 def main():
 
     parser = argparse.ArgumentParser(description="Raven Vehicle Management CLI")
@@ -498,10 +590,14 @@ def main():
 
     # Tests
     test_parser = subparsers.add_parser("test", help="Run test suite and check coverage")
-    test_parser.add_argument("repo", help="Specific repository to test", nargs="?")
+    test_parser.add_argument("repo", help="Specific repository to test, or 'hardware' for Pi-Arduino diagnostic", nargs="?")
 
     # Pull
     subparsers.add_parser("pull", help="Pull latest changes for all Raven repositories")
+    
+    # Push
+    push_parser = subparsers.add_parser("push", help="Add, commit, and push all Raven repositories")
+    push_parser.add_argument("-m", "--message", default="chore: auto-update via raven CLI", help="Commit message to use for all repos")
 
     args = parser.parse_args()
 
@@ -523,6 +619,8 @@ def main():
         manage_tests(args.repo)
     elif args.command == "pull":
         pull_repos()
+    elif args.command == "push":
+        push_repos(args.message)
     else:
         parser.print_help()
 

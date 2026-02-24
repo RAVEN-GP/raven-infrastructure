@@ -17,9 +17,11 @@ We provide a unified command-line tool to manage the car. No more remembering co
 ```bash
 raven start [mode]   # Start the car stack (autonomous/manual/debug)
 raven stop           # Stop all services
-raven flash [--arch] # Flash firmware (arch: mbed/arduino)
+raven flash [--arch] # Compile and Flash firmware (arch: arduino/mbed)
 raven status         # Check system health
 raven deploy         # Pull latest code for all repos
+raven pull           # Pull latest changes for all Raven repositories
+raven push [-m msg]  # Add, commit, and push all Raven repositories
 raven logs           # Tail logs from the brain
 raven docs [action]  # Manage docs (check/build/open)
 raven test [repo]    # Run test suite (all or specific repo)
