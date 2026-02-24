@@ -392,6 +392,81 @@ def manage_tests(repo=None):
         log("SOME TESTS FAILED. CHECK LOGS ABOVE.", "ERROR")
 
 
+
+def pull_repos():
+    log("Updating all RAVEN repositories...", "INFO")
+    repos = [
+        "raven-brain-stack",
+        "raven-computer",
+        "raven-documentation",
+        "raven-embedded-control",
+        "raven-infrastructure",
+        "raven-sim"
+    ]
+    
+    success_count = 0
+    fail_count = 0
+    skipped_count = 0
+    
+    for repo in repos:
+        path = resolve_path(repo)
+        if not path:
+            skipped_count += 1
+            continue
+            
+        print(f"📦 {repo}")
+        try:
+            # Check if it's a git repo
+            if not os.path.exists(os.path.join(path, ".git")):
+                print(f"  └── \033[93mNot a git repository. Skipping.\033[0m")
+                skipped_count += 1
+                continue
+                
+            # Run git pull
+            cmd = ["git", "-C", path, "pull"]
+            print(f"  ├── Running: {' '.join(cmd)}")
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            if result.returncode == 0:
+                print(f"  └── Status: \033[92mSUCCESS\033[0m")
+                if "Already up to date." not in result.stdout:
+                    output = result.stdout.strip()
+                    if output:
+                        # Print first few lines of changes
+                        lines = output.splitlines()
+                        for line in lines[:5]:
+                            print(f"      {line}")
+                        if len(lines) > 5:
+                            print(f"      ...")
+                success_count += 1
+            else:
+                print(f"  └── Status: \033[91mFAILED\033[0m")
+                print("      \033[91mError Output:\033[0m")
+                if result.stderr:
+                    for line in result.stderr.splitlines():
+                        print(f"      {line}")
+                elif result.stdout:
+                    for line in result.stdout.splitlines():
+                        print(f"      {line}")
+                fail_count += 1
+        except Exception as e:
+            print(f"  └── \033[91mError: {e}\033[0m")
+            fail_count += 1
+        print("")
+
+    print("---------------------------------------------------")
+    summary = f"Updated: {success_count} | Failed: {fail_count} | Skipped: {skipped_count}"
+    if fail_count == 0:
+        log(summary, "SUCCESS")
+    else:
+        log(summary, "WARN" if success_count > 0 else "ERROR")
+
+
 def main():
 
     parser = argparse.ArgumentParser(description="Raven Vehicle Management CLI")
@@ -425,6 +500,9 @@ def main():
     test_parser = subparsers.add_parser("test", help="Run test suite and check coverage")
     test_parser.add_argument("repo", help="Specific repository to test", nargs="?")
 
+    # Pull
+    subparsers.add_parser("pull", help="Pull latest changes for all Raven repositories")
+
     args = parser.parse_args()
 
     if args.command == "start":
@@ -443,6 +521,8 @@ def main():
         manage_docs(args.action)
     elif args.command == "test":
         manage_tests(args.repo)
+    elif args.command == "pull":
+        pull_repos()
     else:
         parser.print_help()
 
