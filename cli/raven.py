@@ -317,11 +317,12 @@ def manage_tests(repo=None):
 
     targets = {}
     if repo:
-        if repo == "hardware":
-            log("Running Hardware Diagnostic Test...", "INFO")
+        if repo == "hardware" or repo == "sim":
+            log(f"Running {'Hardware' if repo == 'hardware' else 'Software'} Diagnostic Test...", "INFO")
             path = resolve_path("raven-brain-stack")
             if path:
-                test_script = os.path.join(path, "tests", "test_hardware.py")
+                script_name = "test_hardware.py" if repo == "hardware" else "test_software_sim.py"
+                test_script = os.path.join(path, "tests", script_name)
                 if os.path.exists(test_script):
                     python_exec = sys.executable
                     venv_python = os.path.join(path, "venv", "bin", "python")
@@ -329,7 +330,7 @@ def manage_tests(repo=None):
                         python_exec = venv_python
                     subprocess.run([python_exec, test_script])
                 else:
-                    log(f"Hardware test script not found at {test_script}", "ERROR")
+                    log(f"Test script not found at {test_script}", "ERROR")
             return
             
         if repo not in repos:
@@ -518,7 +519,7 @@ def push_repos(message):
             status_result = subprocess.run(status_cmd, capture_output=True, text=True)
             
             if not status_result.stdout.strip():
-                print(f"  └── Status: \033[94mNO CHANGES (Skipped)\033[0m\n")
+                print(f"  └── \033[90mNo changes to commit. Skipped.\033[0m\n")
                 no_changes_count += 1
                 continue
 
@@ -590,7 +591,7 @@ def main():
 
     # Tests
     test_parser = subparsers.add_parser("test", help="Run test suite and check coverage")
-    test_parser.add_argument("repo", help="Specific repository to test, or 'hardware' for Pi-Arduino diagnostic", nargs="?")
+    test_parser.add_argument("repo", help="Specific repository to test, or 'hardware'/'sim' for serial diagnostics", nargs="?")
 
     # Pull
     subparsers.add_parser("pull", help="Pull latest changes for all Raven repositories")
