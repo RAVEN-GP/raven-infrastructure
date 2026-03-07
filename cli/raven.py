@@ -89,75 +89,120 @@ def detect_serial_port():
         
     return None
 
-def start_car(mode):
-    log(f"Starting RAVEN stack in mode: {mode}")
-    
-    # 1. Start Dashboard (Raven Computer)
+def start_car(mode, laptop_ip=None, no_stream=False, no_arduino=False,
+              conf=0.5, no_filters=False, webcam_index=0,
+              start_x=0.0, start_y=0.0, start_heading=0.0):
+    log(f"Starting RAVEN Skynet stack — mode: {mode}", "INFO")
+
+    brain_path = resolve_path("raven-brain-stack")
+    if not brain_path:
+        log("raven-brain-stack not found.", "ERROR")
+        return
+
+    skynet_script = os.path.join(brain_path, "src", "skynet.py")
+    if not os.path.exists(skynet_script):
+        log(f"skynet.py not found at {skynet_script}", "ERROR")
+        return
+
+    # ── 1. Start Mac-side video viewer (if not suppressed) ────────────────
+    if not no_stream and not laptop_ip:
+        # Ask for laptop IP if not provided and not suppressed
+        try:
+            laptop_ip = input("  Enter Mac/laptop IP for video stream [10.105.27.45]: ").strip()
+            if not laptop_ip:
+                laptop_ip = "10.105.27.45"
+        except (EOFError, KeyboardInterrupt):
+            laptop_ip = "10.105.27.45"
+
+    # ── 2. Start frame_receiver_server on Mac (background) ────────────────
+    receiver_script = os.path.join(brain_path, "services", "rpi-wifi-fallback", "frame_receiver_server.py")
+    if not no_stream and os.path.exists(receiver_script):
+        try:
+            viewer_log = open("/tmp/raven_viewer.log", "w")
+            pv = subprocess.Popen(
+                [sys.executable, receiver_script, "--display"],
+                stdout=viewer_log, stderr=viewer_log, start_new_session=True
+            )
+            RUNNING_PROCESSES["viewer"] = pv
+            print(f"  -> 📺 Video viewer started (PID {pv.pid}) — window opens when Pi connects")
+        except Exception as e:
+            log(f"Could not start viewer: {e}", "WARN")
+
+    # ── 3. Start telemetry dashboard (raven-computer) ─────────────────────
     computer_path = resolve_path("raven-computer")
     if computer_path:
         dash_script = os.path.join(computer_path, "src", "dashboard", "app.py")
         if os.path.exists(dash_script):
-            log("Launching Telemetry Dashboard...", "INFO")
-            # Run in background with logging
             try:
-                # Open log file
                 dash_log = open("/tmp/raven_dashboard.log", "w")
-                
-                # Use current python executable to ensure same env
-                python_exec = sys.executable
-                
-                # start_new_session=True ensures it survives if CLI exits or receives signals
-                p = subprocess.Popen([python_exec, "app.py"], cwd=os.path.dirname(dash_script), 
-                                     stdout=dash_log, stderr=dash_log,
-                                     start_new_session=True)
-                RUNNING_PROCESSES["dashboard"] = p
-                print(f"  -> Dashboard active at http://localhost:5000 📊 (PID: {p.pid})")
-                print("  -> Logs: /tmp/raven_dashboard.log")
+                pd_ = subprocess.Popen(
+                    [sys.executable, "app.py"],
+                    cwd=os.path.dirname(dash_script),
+                    stdout=dash_log, stderr=dash_log, start_new_session=True
+                )
+                RUNNING_PROCESSES["dashboard"] = pd_
+                print(f"  -> 📊 Telemetry dashboard at http://localhost:5000 (PID {pd_.pid})")
             except Exception as e:
-                log(f"Failed to start dashboard: {e}", "ERROR")
-        else:
-             log(f"Dashboard script not found: {dash_script}", "WARN")
+                log(f"Could not start dashboard: {e}", "WARN")
 
-    # 2. Start Brain in Simulation Mode (Raven Brain Stack)
-    brain_path = resolve_path("raven-brain-stack")
-    if brain_path:
-        brain_script = os.path.join(brain_path, "main.py")
-        if os.path.exists(brain_script):
-            log("Launching Brain Stack (Simulation Mode)...", "INFO")
-            env = os.environ.copy()
-            if mode == "autonomous":
-                 env["RAVEN_SIMULATION"] = "true"
-            
-            # Check for venv
-            venv_python = os.path.join(brain_path, "venv", "bin", "python")
-            python_exec = venv_python if os.path.exists(venv_python) else "python3"
+    # ── 4. Build skynet.py arguments ──────────────────────────────────────
+    skynet_args = [sys.executable, skynet_script]
 
-            try:
-                # Open log file
-                brain_log = open("/tmp/raven_brain.log", "w")
-                
-                # start_new_session=True to detach
-                p = subprocess.Popen([python_exec, "main.py"], cwd=brain_path, env=env,
-                                     stdout=brain_log, stderr=brain_log,
-                                     start_new_session=True)
-                RUNNING_PROCESSES["brain"] = p
-                print(f"  -> Brain is ONLINE (PID: {p.pid}) 🧠")
-                print("  -> Logs: /tmp/raven_brain.log")
-            except Exception as e:
-                log(f"Failed to start brain: {e}", "ERROR")
-        else:
-            log(f"Brain script not found: {brain_script}", "WARN")
+    if no_stream or not laptop_ip:
+        skynet_args.append("--no-stream")
+    else:
+        skynet_args += ["--laptop-ip", str(laptop_ip)]
 
-    # Wait mechanism to keep script alive if needed, or just exit and let them run?
-    # CLI tools usually exit. But if we exit, Popen might die depending on shell.
-    # We will write PIDs to a file to stop them later? 
-    # For now, let's dump PIDs to a temp file.
+    if no_arduino or mode == "debug":
+        skynet_args.append("--no-arduino")
+
+    skynet_args += ["--conf", str(conf)]
+
+    if no_filters:
+        skynet_args.append("--no-filters")
+
+    if webcam_index != 0:
+        skynet_args += ["--webcam-index", str(webcam_index)]
+
+    # Pass starting pose if provided (for map-based localization)
+    if start_x != 0.0 or start_y != 0.0 or start_heading != 0.0:
+        skynet_args += [
+            "--start-x",       str(start_x),
+            "--start-y",       str(start_y),
+            "--start-heading", str(start_heading),
+        ]
+
+    # ── 5. Launch skynet.py ───────────────────────────────────────────────
+    try:
+        brain_log_path = "/tmp/raven_brain.log"
+        brain_log = open(brain_log_path, "w")
+        pb = subprocess.Popen(
+            skynet_args, cwd=brain_path,
+            stdout=brain_log, stderr=brain_log, start_new_session=True
+        )
+        RUNNING_PROCESSES["brain"] = pb
+        print(f"  -> 🧠 Skynet launched (PID {pb.pid})")
+        print(f"  -> Logs: {brain_log_path}")
+    except Exception as e:
+        log(f"Failed to start Skynet: {e}", "ERROR")
+        return
+
+    # ── Write PID file ────────────────────────────────────────────────────
     with open("/tmp/raven_pids.txt", "w") as f:
         for name, proc in RUNNING_PROCESSES.items():
             f.write(f"{name}:{proc.pid}\n")
-    
-    log("Startup Sequence Complete. Run 'raven stop' to halt.", "SUCCESS")
 
+    print()
+    print("  ╔════════════════════════════════════════════╗")
+    print("  ║  🚗  RAVEN Skynet is ONLINE                 ║")
+    if not no_stream and laptop_ip:
+        print(f"  ║  📺  Video → {laptop_ip}:5012                 ║")
+    print("  ║  📊  Dashboard → http://localhost:5000     ║")
+    print("  ║  📄  Live logs: raven logs                 ║")
+    print("  ║  🛑  Stop:      raven stop                 ║")
+    print("  ╚════════════════════════════════════════════╝")
+    print()
+    log("Startup complete.", "SUCCESS")
 def stop_car():
     log("Stopping RAVEN stack...", "WARN")
     if os.path.exists("/tmp/raven_pids.txt"):
@@ -561,59 +606,86 @@ def push_repos(message):
         log(summary, "WARN" if success_count > 0 else "ERROR")
 
 def main():
-
-    parser = argparse.ArgumentParser(description="Raven Vehicle Management CLI")
+    parser = argparse.ArgumentParser(
+        description="Raven Vehicle Management CLI",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''Examples:
+  raven start                              # Full autonomous system (prompts for IP)
+  raven start --no-stream                  # No video (Pi only)
+  raven start --no-arduino                 # Bench test without Arduino
+  raven start --conf 0.35 --no-filters     # Lower YOLO confidence
+  raven start --laptop-ip 192.168.50.2     # Custom Mac IP
+  raven stream                             # Start video viewer on Mac only
+  raven calibrate --x 50 --y 30 --heading 90  # Set starting pose for map-based run
+  raven logs                               # Tail all live logs
+  raven status                             # System health check
+  raven stop                               # Stop all services
+  raven flash --arch arduino               # Flash Arduino firmware
+  raven pull                               # Update all repos
+  raven push -m "feat: lane detection"     # Commit & push all repos
+  raven docs build                         # Build Sphinx documentation
+  raven test                               # Run all test suites'''
+    )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
-    # Start
-    start_parser = subparsers.add_parser("start", help="Start the vehicle stack")
-    start_parser.add_argument("mode", choices=["autonomous", "manual", "debug"], default="autonomous", nargs="?")
+    start_p = subparsers.add_parser("start", help="Start the full Skynet autonomous stack")
+    start_p.add_argument("mode", choices=["autonomous", "manual", "debug"], default="autonomous", nargs="?")
+    start_p.add_argument("--laptop-ip", type=str, default=None)
+    start_p.add_argument("--no-stream", action="store_true")
+    start_p.add_argument("--no-arduino", action="store_true")
+    start_p.add_argument("--conf", type=float, default=0.5)
+    start_p.add_argument("--no-filters", action="store_true")
+    start_p.add_argument("--webcam-index", type=int, default=0)
+    start_p.add_argument("--start-x", type=float, default=0.0)
+    start_p.add_argument("--start-y", type=float, default=0.0)
+    start_p.add_argument("--start-heading", type=float, default=0.0)
 
-    # Stop
-    subparsers.add_parser("stop", help="Stop all vehicle services")
+    subparsers.add_parser("stop", help="Stop all Raven services")
+    subparsers.add_parser("status", help="Show live system health")
 
-    # Status
-    subparsers.add_parser("status", help="Show system diagnostic status")
+    stream_p = subparsers.add_parser("stream", help="Start the video viewer on Mac")
+    stream_p.add_argument("--laptop-ip", type=str, default=None)
 
-    # Deploy
+    cal_p = subparsers.add_parser("calibrate", help="Set the car's starting pose")
+    cal_p.add_argument("--x", type=float, default=0.0)
+    cal_p.add_argument("--y", type=float, default=0.0)
+    cal_p.add_argument("--heading", type=float, default=0.0)
+
+    logs_p = subparsers.add_parser("logs", help="Tail live logs")
+    logs_p.add_argument("--no-follow", action="store_true")
+
     subparsers.add_parser("deploy", help="Pull and build latest code")
+    flash_p = subparsers.add_parser("flash", help="Compile and flash firmware")
+    flash_p.add_argument("--arch", choices=["mbed", "arduino"], default="arduino")
 
-    # Flash
-    flash_parser = subparsers.add_parser("flash", help="Flash firmware to microcontroller")
-    flash_parser.add_argument("--arch", choices=["mbed", "arduino"], default="mbed", help="Target architecture")
+    docs_p = subparsers.add_parser("docs", help="Manage Sphinx documentation")
+    docs_p.add_argument("action", choices=["build", "open", "check"], default="check", nargs="?")
 
-    # Logs
-    subparsers.add_parser("logs", help="Tail system logs")
+    test_p = subparsers.add_parser("test", help="Run test suite")
+    test_p.add_argument("repo", nargs="?")
 
-    # Docs
-    docs_parser = subparsers.add_parser("docs", help="Manage documentation")
-    docs_parser.add_argument("action", choices=["build", "open", "check"], default="check", nargs="?")
-
-    # Tests
-    test_parser = subparsers.add_parser("test", help="Run test suite and check coverage")
-    test_parser.add_argument("repo", help="Specific repository to test, or 'hardware'/'sim' for serial diagnostics", nargs="?")
-
-    # Pull
-    subparsers.add_parser("pull", help="Pull latest changes for all Raven repositories")
-    
-    # Push
-    push_parser = subparsers.add_parser("push", help="Add, commit, and push all Raven repositories")
-    push_parser.add_argument("-m", "--message", default="chore: auto-update via raven CLI", help="Commit message to use for all repos")
+    subparsers.add_parser("pull", help="Pull latest changes")
+    push_p = subparsers.add_parser("push", help="Commit and push")
+    push_p.add_argument("-m", "--message", default="chore: auto-update via raven CLI")
 
     args = parser.parse_args()
 
     if args.command == "start":
-        start_car(args.mode)
+        start_car(args.mode, args.laptop_ip, args.no_stream, args.no_arduino, args.conf, args.no_filters, args.webcam_index, args.start_x, args.start_y, args.start_heading)
     elif args.command == "stop":
         stop_car()
     elif args.command == "status":
         status_car()
+    elif args.command == "stream":
+        stream_video(getattr(args, "laptop_ip", None))
+    elif args.command == "calibrate":
+        calibrate_start(args.x, args.y, args.heading)
+    elif args.command == "logs":
+        watch_logs(follow=not args.no_follow)
     elif args.command == "deploy":
         deploy_code()
     elif args.command == "flash":
         flash_firmware(args.arch)
-    elif args.command == "logs":
-        tail_logs()
     elif args.command == "docs":
         manage_docs(args.action)
     elif args.command == "test":
