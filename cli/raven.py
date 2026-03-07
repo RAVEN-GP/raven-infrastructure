@@ -583,6 +583,13 @@ def push_repos(message):
             print(f"  ├── Running: {' '.join(push_cmd)}")
             push_result = subprocess.run(push_cmd, capture_output=True, text=True)
             
+            # Auto-set upstream if it's a new branch
+            if push_result.returncode != 0 and "has no upstream branch" in push_result.stderr:
+                print(f"  ├── \033[93mNo upstream branch found. Auto-setting upstream...\033[0m")
+                push_cmd_up = ["git", "-C", path, "push", "-u", "origin", "HEAD"]
+                print(f"  ├── Running: {' '.join(push_cmd_up)}")
+                push_result = subprocess.run(push_cmd_up, capture_output=True, text=True)
+            
             if push_result.returncode == 0:
                 print(f"  └── Status: \033[92mSUCCESS\033[0m\n")
                 success_count += 1
