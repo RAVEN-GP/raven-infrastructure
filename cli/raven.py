@@ -165,9 +165,6 @@ def start_car(mode, laptop_ip=None, no_stream=False, no_arduino=False,
     if cruise:
         skynet_args.append("--cruise")
 
-    if cruise:
-        skynet_args.append("--cruise")
-
     if no_arduino or mode == "debug":
         skynet_args.append("--no-arduino")
 
