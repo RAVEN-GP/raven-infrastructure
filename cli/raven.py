@@ -93,8 +93,12 @@ def detect_serial_port():
 
 def start_car(mode, laptop_ip=None, no_stream=False, no_arduino=False,
               conf=0.5, no_filters=False, webcam_index=0,
-              start_x=0.0, start_y=0.0, start_heading=0.0):
+              start_x=0.0, start_y=0.0, start_heading=0.0, cruise=False):
     log(f"Starting RAVEN Skynet stack — mode: {mode}", "INFO")
+
+    # Safety: ensure no old processes are running before starting a new one
+    stop_car()
+    time.sleep(1)
 
     brain_path = resolve_path("raven-brain-stack")
     if not brain_path:
@@ -158,6 +162,12 @@ def start_car(mode, laptop_ip=None, no_stream=False, no_arduino=False,
     else:
         skynet_args += ["--laptop-ip", str(laptop_ip)]
 
+    if cruise:
+        skynet_args.append("--cruise")
+
+    if cruise:
+        skynet_args.append("--cruise")
+
     if no_arduino or mode == "debug":
         skynet_args.append("--no-arduino")
 
@@ -212,18 +222,35 @@ def stop_car():
     log("Stopping RAVEN stack...", "WARN")
     if os.path.exists("/tmp/raven_pids.txt"):
         with open("/tmp/raven_pids.txt", "r") as f:
-            for line in f:
-                try:
-                    name, pid = line.strip().split(":")
-                    os.kill(int(pid), 15) # SIGTERM
-                    print(f"  -> Stopped {name} [PID {pid}]")
-                except Exception:
-                    pass
+            lines = f.readlines()
+            
+        # 1. Try polite SIGTERM
+        for line in lines:
+            try:
+                name, pid = line.strip().split(":")
+                os.kill(int(pid), 15) # SIGTERM
+                print(f"  -> Requested {name} to stop [PID {pid}]")
+            except Exception:
+                pass
+        
+        time.sleep(1.0) # Wait for threads to close serial etc.
+        
+        # 2. Force SIGKILL for survivors
+        for line in lines:
+            try:
+                name, pid = line.strip().split(":")
+                os.kill(int(pid), 9) # SIGKILL
+                print(f"  -> Force-killed {name} [PID {pid}]")
+            except Exception:
+                pass
+
         os.remove("/tmp/raven_pids.txt")
-        print("  -> Parked servos.")
         log("RAVEN system HALTED.", "SUCCESS")
     else:
-        log("No active RAVEN processes found (check /tmp/raven_pids.txt).", "INFO")
+        log("No active PID file found. Checking for lingering processes...", "INFO")
+        # Fallback: kill anything running skynet.py
+        subprocess.run("pkill -9 -f skynet.py", shell=True)
+        subprocess.run("pkill -9 -f frame_receiver_server.py", shell=True)
 
 def deploy_code():
     log("Deploying latest code...", "INFO")
@@ -678,6 +705,7 @@ def main():
     start_p.add_argument("--start-x", type=float, default=0.0)
     start_p.add_argument("--start-y", type=float, default=0.0)
     start_p.add_argument("--start-heading", type=float, default=0.0)
+    start_p.add_argument("--cruise", action="store_true", help="Start moving at cruise speed automatically")
 
     subparsers.add_parser("stop", help="Stop all Raven services")
     subparsers.add_parser("status", help="Show live system health")
@@ -710,7 +738,7 @@ def main():
     args = parser.parse_args()
 
     if args.command == "start":
-        start_car(args.mode, args.laptop_ip, args.no_stream, args.no_arduino, args.conf, args.no_filters, args.webcam_index, args.start_x, args.start_y, args.start_heading)
+        start_car(args.mode, args.laptop_ip, args.no_stream, args.no_arduino, args.conf, args.no_filters, args.webcam_index, args.start_x, args.start_y, args.start_heading, args.cruise)
     elif args.command == "stop":
         stop_car()
     elif args.command == "status":
