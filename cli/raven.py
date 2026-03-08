@@ -5,6 +5,8 @@ import sys
 import time
 import os
 import re
+import json
+import math
 from datetime import datetime
 try:
     import serial.tools.list_ports
@@ -108,11 +110,11 @@ def start_car(mode, laptop_ip=None, no_stream=False, no_arduino=False,
     if not no_stream and not laptop_ip:
         # Ask for laptop IP if not provided and not suppressed
         try:
-            laptop_ip = input("  Enter Mac/laptop IP for video stream [10.105.27.45]: ").strip()
+            laptop_ip = input("  Enter Mac/laptop IP for video stream [10.82.10.45]: ").strip()
             if not laptop_ip:
-                laptop_ip = "10.105.27.45"
+                laptop_ip = "10.82.10.45"
         except (EOFError, KeyboardInterrupt):
-            laptop_ip = "10.105.27.45"
+            laptop_ip = "10.82.10.45"
 
     # ── 2. Start frame_receiver_server on Mac (background) ────────────────
     receiver_script = os.path.join(brain_path, "services", "rpi-wifi-fallback", "frame_receiver_server.py")
@@ -146,7 +148,10 @@ def start_car(mode, laptop_ip=None, no_stream=False, no_arduino=False,
                 log(f"Could not start dashboard: {e}", "WARN")
 
     # ── 4. Build skynet.py arguments ──────────────────────────────────────
-    skynet_args = [sys.executable, skynet_script]
+    # Try to find the virtual environment python first
+    venv_python = os.path.join(brain_path, "venv", "bin", "python")
+    python_exec = venv_python if os.path.exists(venv_python) else sys.executable
+    skynet_args = [python_exec, skynet_script]
 
     if no_stream or not laptop_ip:
         skynet_args.append("--no-stream")
@@ -307,13 +312,40 @@ def flash_firmware(arch):
              print("  -> Please install: brew install arduino-cli")
              print(f"  -> Sketch location: {sketch_path}")
 
-def tail_logs():
+def calibrate_start(x, y, heading):
+    pose = {
+        "x": float(x),
+        "y": float(y),
+        "heading": float(heading)
+    }
+    pose_path = "/tmp/raven_start_pose.json"
+    with open(pose_path, "w") as f:
+        json.dump(pose, f)
+    log(f"Calibrated start point: ({x}, {y}) at {heading} degrees.", "SUCCESS")
+    print(f"  -> Saved to: {pose_path}")
+
+def stream_video(laptop_ip=None):
+    log("Starting video stream viewer...", "INFO")
+    brain_path = resolve_path("raven-brain-stack")
+    if not brain_path: return
+    
+    script = os.path.join(brain_path, "services", "rpi-wifi-fallback", "frame_receiver_server.py")
+    if os.path.exists(script):
+        log(f"Launching viewer: {script}", "INFO")
+        subprocess.run([sys.executable, script, "--display"])
+    else:
+        log("frame_receiver_server.py not found.", "ERROR")
+
+def watch_logs(follow=True):
     log("Tailing system logs (Ctrl+C to exit)...", "INFO")
+    log_file = "/tmp/raven_brain.log"
+    if not os.path.exists(log_file):
+        log(f"Log file not found at {log_file}. Is Skynet running?", "WARN")
+        return
+        
+    cmd = ["tail", "-f", log_file] if follow else ["tail", "-n", "50", log_file]
     try:
-        while True:
-            # Mock log stream
-            time.sleep(2)
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] [BRAIN] Planner: Waypoint reached.")
+        subprocess.run(cmd)
     except KeyboardInterrupt:
         print("\nLog stream stopped.")
 
