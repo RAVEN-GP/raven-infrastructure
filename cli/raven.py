@@ -114,11 +114,11 @@ def start_car(mode, laptop_ip=None, no_stream=False, no_arduino=False,
     if not no_stream and not laptop_ip:
         # Ask for laptop IP if not provided and not suppressed
         try:
-            laptop_ip = input("  Enter Mac/laptop IP for video stream [10.82.10.45]: ").strip()
+            laptop_ip = input("  Enter Mac/laptop IP for video stream [192.168.1.169]: ").strip()
             if not laptop_ip:
-                laptop_ip = "10.82.10.45"
+                laptop_ip = "192.168.1.169"
         except (EOFError, KeyboardInterrupt):
-            laptop_ip = "10.82.10.45"
+            laptop_ip = "192.168.1.169"
 
     # ── 2. Start frame_receiver_server on Mac (background) ────────────────
     receiver_script = os.path.join(brain_path, "services", "rpi-wifi-fallback", "frame_receiver_server.py")
@@ -155,6 +155,40 @@ def start_car(mode, laptop_ip=None, no_stream=False, no_arduino=False,
     # Try to find the virtual environment python first
     venv_python = os.path.join(brain_path, "venv", "bin", "python")
     python_exec = venv_python if os.path.exists(venv_python) else sys.executable
+
+    if mode == "manual":
+        # Write PID file for currently started background services (viewer, dashboard)
+        with open("/tmp/raven_pids.txt", "w") as f:
+            for name, proc in RUNNING_PROCESSES.items():
+                f.write(f"{name}:{proc.pid}\n")
+                
+        print()
+        print("  ╔════════════════════════════════════════════╗")
+        print("  ║  🕹️  RAVEN Manual Control Mode ONLINE       ║")
+        if not no_stream and laptop_ip:
+            print(f"  ║  📺  Video → {laptop_ip}:5012                 ║")
+        print("  ║  🛑  Press Q to quit the terminal session   ║")
+        print("  ╚════════════════════════════════════════════╝")
+        print()
+
+        teleop_script = os.path.join(brain_path, "src", "teleop_wasd.py")
+        teleop_args = [python_exec, teleop_script]
+        if no_stream or not laptop_ip:
+            teleop_args.append("--no-stream")
+        else:
+            teleop_args += ["--laptop-ip", str(laptop_ip)]
+        if webcam_index != 0:
+            teleop_args += ["--webcam-index", str(webcam_index)]
+            
+        try:
+            subprocess.run(teleop_args, cwd=brain_path)
+        except KeyboardInterrupt:
+            pass
+            
+        print("  -> Cleaning up background services...")
+        stop_car()
+        return
+
     skynet_args = [python_exec, skynet_script]
 
     if no_stream or not laptop_ip:
